@@ -203,7 +203,7 @@ function update() {
   $('#bondLengthLabel').hidden = !chainSystem;
   $('#bondLength').hidden = !chainSystem;
   $('#baseDimensions').classList.toggle('particles-only', !chainSystem);
-  $('#dimensionHint').textContent = chainSystem ? 'Bond length is the distance between bonded bead centers.' : 'Bead size sets particle diameter; length unit follows your unit system.';
+  $('#dimensionHint').textContent = chainSystem ? 'Bond length is the distance between bonded bead centers.' : 'Bead size sets the diameter of each LJ particle.';
   $('#beadSizeUnit').textContent = `(${unit})`;
   $('#bondLengthUnit').textContent = `(${unit})`;
   $('#tetherLengthUnit').textContent = `(${unit})`;
@@ -478,6 +478,74 @@ $('#generateBtn').addEventListener('click', () => {
   } catch (error) { status.className = 'preview-note error'; status.textContent = error.message; }
 });
 
+const CALC_UNIT_STYLES = {
+  real: { length: 'Å', hint: 'Real: box lengths are in Å; molecule concentration is reported in µmol/L and mmol/L.' },
+  lj: { length: 'σ', hint: 'LJ: box lengths are in σ; molecule concentration is reported as reduced number density in molecules/σ³.' },
+};
+const AVOGADRO = 6.02214076e23;
+const numberFormat = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 6 });
+function positiveNumber(id) {
+  const value = Number($(`#${id}`).value);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+function positiveInteger(id) {
+  const value = Number($(`#${id}`).value);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+function updateCalculators() {
+  const style = CALC_UNIT_STYLES[$('#calcUnits').value] || CALC_UNIT_STYLES.real;
+  $$('.calcLengthUnit').forEach(unit => { unit.textContent = `(${style.length})`; });
+  $('#calcUnitHint').textContent = style.hint;
+  const realUnits = $('#calcUnits').value !== 'lj';
+  $('#targetDensityScale').hidden = !realUnits;
+  $('#targetDensityLJUnit').hidden = realUnits;
+
+  const densityPolymers = positiveInteger('densityPolymerCount');
+  const densityX = positiveNumber('densityBoxX');
+  const densityY = positiveNumber('densityBoxY');
+  const densityZ = positiveNumber('densityBoxZ');
+  if (!densityPolymers || !densityX || !densityY || !densityZ) $('#densityResult').textContent = 'Enter a positive molecule count and X, Y, and Z lengths';
+  else if (realUnits) {
+    const molPerLiter = densityPolymers / (AVOGADRO * densityX * densityY * densityZ * 1e-27);
+    $('#densityResult').textContent = `${numberFormat.format(molPerLiter * 1e6)} µmol/L · ${numberFormat.format(molPerLiter * 1e3)} mmol/L`;
+  } else {
+    $('#densityResult').textContent = `${numberFormat.format(densityPolymers / (densityX * densityY * densityZ))} molecules/σ³`;
+  }
+
+  const boxPolymers = positiveInteger('boxPolymerCount');
+  const targetDensity = positiveNumber('targetDensity');
+  const aspectX = positiveNumber('boxAspectX');
+  const aspectY = positiveNumber('boxAspectY');
+  const aspectZ = positiveNumber('boxAspectZ');
+  if (!boxPolymers || !targetDensity) $('#boxLengthResult').textContent = 'Enter a positive molecule count and target concentration';
+  else if (!aspectX || !aspectY || !aspectZ) $('#boxLengthResult').textContent = 'Enter positive X:Y:Z proportions';
+  else {
+    const volume = realUnits
+      ? boxPolymers / (AVOGADRO * targetDensity * ($('#targetDensityScale').value === 'mmol' ? 1e-3 : 1e-6) * 1e-27)
+      : boxPolymers / targetDensity;
+    const scale = Math.cbrt(volume / (aspectX * aspectY * aspectZ));
+    const unit = style.length;
+    $('#boxLengthResult').textContent = `X ${numberFormat.format(aspectX * scale)} × Y ${numberFormat.format(aspectY * scale)} × Z ${numberFormat.format(aspectZ * scale)} ${unit}`;
+  }
+}
+
+['densityPolymerCount', 'densityBoxX', 'densityBoxY', 'densityBoxZ', 'boxPolymerCount', 'targetDensity', 'boxAspectX', 'boxAspectY', 'boxAspectZ'].forEach(id => $(`#${id}`).addEventListener('input', updateCalculators));
+$('#calcUnits').addEventListener('change', updateCalculators);
+$('#targetDensityScale').addEventListener('change', updateCalculators);
+
+function syncPageFromHash() {
+  const requestedPage = window.location.hash.slice(1);
+  const page = ['calculations', 'contact'].includes(requestedPage) ? requestedPage : 'structure';
+  $('#structurePage').hidden = page !== 'structure';
+  $('#calculationsPage').hidden = page !== 'calculations';
+  $('#contactPage').hidden = page !== 'contact';
+  $$('[data-page-link]').forEach(link => {
+    if (link.dataset.pageLink === page) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+}
+window.addEventListener('hashchange', syncPageFromHash);
+
 function init() {
   renderCountRows('#particleTypeRows', Number($('#particleTypeCount').value), Number($('#particleTotal').value), 'data-count', 'data-mass');
   renderRangeRows('#polymerTypeRows', '#polymerTypeCount', 'data-poly-indices', 'data-mass');
@@ -506,5 +574,7 @@ function init() {
     } catch { localStorage.removeItem('structureDraft'); }
   }
   update();
+  updateCalculators();
+  syncPageFromHash();
 }
 init();
