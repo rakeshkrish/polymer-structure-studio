@@ -328,8 +328,13 @@ function randomDirection(random) {
   return [radial * Math.cos(phi), radial * Math.sin(phi), z];
 }
 function buildLinearChain(count, bondLength, box, radius, random, grid) {
-  for (let restart = 0; restart < 4000; restart++) {
-    const direction = randomDirection(random);
+  // Try axis-aligned placements regularly so a narrow box dimension does not
+  // cause random orientations to miss a valid placement.
+  const axisDirections = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  for (let restart = 0; restart < 6000; restart++) {
+    const direction = restart % 4 === 0
+      ? axisDirections[Math.floor(restart / 4) % axisDirections.length]
+      : randomDirection(random);
     const halfLength = (count - 1) * bondLength / 2;
     const extents = direction.map(v => Math.abs(v) * halfLength + radius);
     if (extents.some((extent, axis) => 2 * extent > box[axis])) continue;
@@ -346,43 +351,96 @@ function buildCurvedChain(count, bondLength, box, radius, random, grid, tether) 
   const segments = b - a, distance = tether.length;
   if (segments === 1 || Math.abs(distance - segments * bondLength) < 1e-8) return buildLinearChain(count, bondLength, box, radius, random, grid);
 
-  // A sinusoidal/helical bridge: each step has length bondLength and the wave closes at bead b.
+  // A sinusoidal/helical bridge: every step has length bondLength and the
+  // integer number of turns makes the wave close at the second anchor.
   const axialStep = distance / segments;
   const waveStep = Math.sqrt(Math.max(0, bondLength * bondLength - axialStep * axialStep));
-  const offsets = [[0, 0, 0]];
-  let waveY = 0, waveZ = 0;
-  for (let i = 0; i < segments; i++) {
-    const phase = 2 * Math.PI * i / segments;
-    waveY += waveStep * Math.cos(phase);
-    waveZ += waveStep * Math.sin(phase);
-    offsets.push([axialStep * (i + 1), waveY, waveZ]);
-  }
-  // Remove accumulated floating point drift so the second anchor is exactly on the axis.
-  const driftY = offsets[segments][1], driftZ = offsets[segments][2];
-  offsets.forEach((point, i) => { point[1] -= driftY * i / segments; point[2] -= driftZ * i / segments; });
-  const local = Array.from({ length: count }, (_, i) => {
-    if (i < a) return [-(a - i) * bondLength, 0, 0];
-    if (i <= b) return offsets[i - a];
-    return [distance + (i - b) * bondLength, 0, 0];
-  });
-
-  for (let restart = 0; restart < 4000; restart++) {
-    const direction = randomDirection(random);
-    const helper = Math.abs(direction[2]) < .85 ? [0, 0, 1] : [0, 1, 0];
-    let sideways = [direction[1] * helper[2] - direction[2] * helper[1], direction[2] * helper[0] - direction[0] * helper[2], direction[0] * helper[1] - direction[1] * helper[0]];
-    const norm = Math.hypot(...sideways); sideways = sideways.map(v => v / norm);
-    const secondSideways = [direction[1] * sideways[2] - direction[2] * sideways[1], direction[2] * sideways[0] - direction[0] * sideways[2], direction[0] * sideways[1] - direction[1] * sideways[0]];
-    const points = local.map(([x, y, z]) => direction.map((v, axis) => v * x + sideways[axis] * y + secondSideways[axis] * z));
+  const makeLocal = offsets => {
+    const local = Array.from({ length: count }, (_, i) => {
+      if (i < a) return [-(a - i) * bondLength, 0, 0];
+      if (i <= b) return offsets[i - a];
+      return [distance + (i - b) * bondLength, 0, 0];
+    });
     const mins = [Infinity, Infinity, Infinity], maxs = [-Infinity, -Infinity, -Infinity];
-    points.forEach(point => point.forEach((v, axis) => { mins[axis] = Math.min(mins[axis], v); maxs[axis] = Math.max(maxs[axis], v); }));
-    const spans = maxs.map((v, axis) => v - mins[axis] + 2 * radius);
-    if (spans.some((span, axis) => span > box[axis])) continue;
-    const shift = box.map((length, axis) => radius - mins[axis] + random() * (length - spans[axis]));
-    const placed = points.map(point => point.map((v, axis) => v + shift[axis]));
-    if (placed.some(point => grid.overlaps(point, radius))) continue;
-    return placed;
+    local.forEach(point => point.forEach((v, axis) => { mins[axis] = Math.min(mins[axis], v); maxs[axis] = Math.max(maxs[axis], v); }));
+    return { local, spans: maxs.map((v, axis) => v - mins[axis] + 2 * radius) };
+  };
+  const makeConformation = turns => {
+    const offsets = [[0, 0, 0]];
+    let waveY = 0, waveZ = 0;
+    for (let i = 0; i < segments; i++) {
+      const phase = 2 * Math.PI * turns * i / segments;
+      waveY += waveStep * Math.cos(phase);
+      waveZ += waveStep * Math.sin(phase);
+      offsets.push([axialStep * (i + 1), waveY, waveZ]);
+    }
+    // Remove accumulated floating point drift so the anchors close exactly.
+    const driftY = offsets[segments][1], driftZ = offsets[segments][2];
+    offsets.forEach((point, i) => { point[1] -= driftY * i / segments; point[2] -= driftZ * i / segments; });
+    return makeLocal(offsets);
+  };
+  const makeZigzagConformation = () => {
+    const transverse = [];
+    const pairs = segments % 2 === 0 ? segments / 2 : (segments - 3) / 2;
+    for (let pair = 0; pair < pairs; pair++) transverse.push([waveStep, 0], [-waveStep, 0]);
+    if (segments % 2) {
+      transverse.push([waveStep, 0], [waveStep * Math.cos(2 * Math.PI / 3), waveStep * Math.sin(2 * Math.PI / 3)], [waveStep * Math.cos(4 * Math.PI / 3), waveStep * Math.sin(4 * Math.PI / 3)]);
+    }
+    const offsets = [[0, 0, 0]];
+    transverse.forEach(([y, z], i) => offsets.push([axialStep * (i + 1), offsets[i][1] + y, offsets[i][2] + z]));
+    const driftY = offsets[segments][1], driftZ = offsets[segments][2];
+    offsets.forEach((point, i) => { point[1] -= driftY * i / segments; point[2] -= driftZ * i / segments; });
+    return makeLocal(offsets);
+  };
+
+  const fitsAxisAligned = spans => {
+    const sortedSpans = [...spans].sort((x, y) => x - y);
+    const sortedBox = [...box].sort((x, y) => x - y);
+    return sortedSpans.every((span, axis) => span <= sortedBox[axis]);
+  };
+  const maxTurns = Math.max(1, Math.floor(segments / 2));
+  const conformations = [makeZigzagConformation(), ...Array.from({ length: maxTurns }, (_, i) => makeConformation(i + 1))];
+  // Prefer the compact bead-by-bead zigzag. Multi-wave curves are fallbacks
+  // when that zigzag would overlap itself or does not fit the box.
+  const fittingConformations = conformations.filter(shape => fitsAxisAligned(shape.spans));
+  const candidates = (fittingConformations.length ? fittingConformations : conformations
+    .sort((left, right) => Math.max(...left.spans) - Math.max(...right.spans)))
+    .slice(0, 24);
+
+  // Keep candidate waves that do not fold back through their own beads.
+  const diameter = radius * 2;
+  const hasSelfOverlap = points => {
+    for (let i = 0; i < points.length; i++) for (let j = i + 2; j < points.length; j++) {
+      const dx = points[i][0] - points[j][0], dy = points[i][1] - points[j][1], dz = points[i][2] - points[j][2];
+      if (dx * dx + dy * dy + dz * dz < diameter * diameter - 1e-10) return true;
+    }
+    return false;
+  };
+
+  // Axis-aligned placements are especially useful in long, narrow boxes.
+  const axisDirections = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  for (const { local } of candidates) {
+    if (hasSelfOverlap(local)) continue;
+    for (let restart = 0; restart < 3000; restart++) {
+      const direction = restart % 4 === 0
+        ? axisDirections[Math.floor(restart / 4) % axisDirections.length]
+        : randomDirection(random);
+      const helper = Math.abs(direction[2]) < .85 ? [0, 0, 1] : [0, 1, 0];
+      let sideways = [direction[1] * helper[2] - direction[2] * helper[1], direction[2] * helper[0] - direction[0] * helper[2], direction[0] * helper[1] - direction[1] * helper[0]];
+      const norm = Math.hypot(...sideways); sideways = sideways.map(v => v / norm);
+      const secondSideways = [direction[1] * sideways[2] - direction[2] * sideways[1], direction[2] * sideways[0] - direction[0] * sideways[2], direction[0] * sideways[1] - direction[1] * sideways[0]];
+      const points = local.map(([x, y, z]) => direction.map((v, axis) => v * x + sideways[axis] * y + secondSideways[axis] * z));
+      const mins = [Infinity, Infinity, Infinity], maxs = [-Infinity, -Infinity, -Infinity];
+      points.forEach(point => point.forEach((v, axis) => { mins[axis] = Math.min(mins[axis], v); maxs[axis] = Math.max(maxs[axis], v); }));
+      const spans = maxs.map((v, axis) => v - mins[axis] + 2 * radius);
+      if (spans.some((span, axis) => span > box[axis])) continue;
+      const shift = box.map((length, axis) => radius - mins[axis] + random() * (length - spans[axis]));
+      const placed = points.map(point => point.map((v, axis) => v + shift[axis]));
+      if (placed.some(point => grid.overlaps(point, radius))) continue;
+      return placed;
+    }
   }
-  throw new Error('Could not place the wavy tethered polymer without overlap. Increase the box size or adjust anchor separation.');
+  throw new Error('Could not place a non-overlapping wavy tethered polymer. Try a different anchor separation or a larger box.');
 }
 function assignTypes(beadCount, typeCount, inputMap) {
   const assigned = Array.from({ length: typeCount + 1 }, () => new Set());
