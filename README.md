@@ -2,6 +2,12 @@
 
 A lightweight browser app for generating initial LAMMPS data files for bead-spring polymers, free LJ particles, and mixed systems.
 
+## Version 1.2
+
+- The calculations page focuses on molecule concentration. For LJ units, enter the physical σ in nm to report µmol/L and mmol/L.
+- Default bead masses and free LJ-particle size are 1, and polymer settings appear before tether settings.
+- Tethered polymers use compact zigzag conformations to fit more easily inside narrow boxes.
+
 ## Use
 
 Open `index.html` in a modern browser, choose the unit and system types, enter the bead composition and box dimensions, then generate `system.data`.

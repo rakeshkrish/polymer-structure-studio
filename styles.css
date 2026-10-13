@@ -34,3 +34,4 @@
 #hybridDimensions{padding:14px 15px;border:1px solid #d8e5f0;border-left:3px solid #6596b7;border-radius:9px;background:#f2f7fb}
 #hybridDimensions .category-title,#hybridDimensions .field-label{color:#365b75}
 #setupForm>.seed-field{padding:12px 15px;border:1px solid #e3e7e4;border-radius:9px;background:#f5f6f5}
+#calculationsPage .calculators-grid{grid-template-columns:minmax(0,1fr)}

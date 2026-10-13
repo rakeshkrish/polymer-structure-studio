@@ -12,7 +12,7 @@ function renderCountRows(container, count, total, attr, massAttr, preserve = fal
   const box = $(container);
   const old = preserve ? [...box.querySelectorAll(`[${attr}]`)].map((input) => ({
     count: Number(input.value),
-    mass: Number(box.querySelector(`[${massAttr}="${Number(input.dataset.index) + 1}"]`)?.value) || 110,
+    mass: Number(box.querySelector(`[${massAttr}="${Number(input.dataset.index) + 1}"]`)?.value) || 1,
   })) : [];
   const isHybridLJ = attr === 'data-hybrid-lj-count';
   box.innerHTML = Array.from({ length: count }, (_, i) => {
@@ -21,7 +21,7 @@ function renderCountRows(container, count, total, attr, massAttr, preserve = fal
     return `<div class="type-row">
       <span class="type-name"><i style="--type-color:${colors[i]}"></i>${isHybridLJ ? 'LJ type' : 'Type'} ${i + 1}${isHybridLJ ? `<small class="global-type-id">LAMMPS type ${atomType}</small>` : ''}</span>
       <span class="type-count-wrap"><input ${attr}="${i}" data-index="${i}" type="number" min="0" value="${old[i]?.count ?? evenlySplit}" aria-label="Number of beads in type ${i + 1}"><small>beads</small></span>
-      <label class="mass-wrap">Mass<input class="mass-input" ${massAttr}="${i + 1}" type="number" min="0.001" step="0.1" value="${old[i]?.mass ?? 110}" aria-label="Mass for type ${i + 1}"></label>
+      <label class="mass-wrap">Mass<input class="mass-input" ${massAttr}="${i + 1}" type="number" min="0.001" step="0.1" value="${old[i]?.mass ?? 1}" aria-label="Mass for type ${i + 1}"></label>
     </div>`;
   }).join('');
 }
@@ -31,18 +31,18 @@ function renderRangeRows(container, select, indexAttr, massAttr, preserve = fals
   const count = Number($(select).value);
   const old = preserve ? [...box.querySelectorAll(`[${indexAttr}]`)].map((input) => ({
     indices: input.value,
-    mass: box.querySelector(`[${massAttr}="${input.dataset.type}"]`)?.value || 110,
+    mass: box.querySelector(`[${massAttr}="${input.dataset.type}"]`)?.value || 1,
   })) : [];
   const rows = [`<div class="type-row">
     <span class="type-name"><i style="--type-color:${colors[0]}"></i>Type 1 <small class="default-tag">default</small></span>
-    <label class="mass-wrap">Mass<input class="mass-input" ${massAttr}="1" data-type="1" type="number" min="0.001" step="0.1" value="${box.querySelector(`[${massAttr}="1"]`)?.value || 110}" aria-label="Mass for type 1"></label>
+    <label class="mass-wrap">Mass<input class="mass-input" ${massAttr}="1" data-type="1" type="number" min="0.001" step="0.1" value="${box.querySelector(`[${massAttr}="1"]`)?.value || 1}" aria-label="Mass for type 1"></label>
   </div>`];
   for (let type = 2; type <= count; type++) {
     const prior = old[type - 2];
     rows.push(`<div class="range-row">
       <span class="type-name"><i style="--type-color:${colors[type - 1]}"></i>Type ${type}</span>
       <input class="range-input" ${indexAttr}="${type}" data-type="${type}" type="text" value="${prior?.indices ?? (type === 2 ? '40-46' : '')}" placeholder="e.g. 1, 100, 15-20" aria-label="Bead indices for type ${type}">
-      <label class="mass-wrap">Mass<input class="mass-input" ${massAttr}="${type}" data-type="${type}" type="number" min="0.001" step="0.1" value="${prior?.mass ?? 110}" aria-label="Mass for type ${type}"></label>
+      <label class="mass-wrap">Mass<input class="mass-input" ${massAttr}="${type}" data-type="${type}" type="number" min="0.001" step="0.1" value="${prior?.mass ?? 1}" aria-label="Mass for type ${type}"></label>
     </div>`);
   }
   box.innerHTML = rows.join('');
@@ -538,7 +538,7 @@ $('#generateBtn').addEventListener('click', () => {
 
 const CALC_UNIT_STYLES = {
   real: { length: 'Å', hint: 'Real: box lengths are in Å; molecule concentration is reported in µmol/L and mmol/L.' },
-  lj: { length: 'σ', hint: 'LJ: box lengths are in σ; molecule concentration is reported as reduced number density in molecules/σ³.' },
+  lj: { length: 'σ', hint: 'LJ: box lengths are in σ. Enter the physical σ in nm to report concentration in µmol/L and mmol/L.' },
 };
 const AVOGADRO = 6.02214076e23;
 const numberFormat = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 6 });
@@ -555,41 +555,27 @@ function updateCalculators() {
   $$('.calcLengthUnit').forEach(unit => { unit.textContent = `(${style.length})`; });
   $('#calcUnitHint').textContent = style.hint;
   const realUnits = $('#calcUnits').value !== 'lj';
-  $('#targetDensityScale').hidden = !realUnits;
-  $('#targetDensityLJUnit').hidden = realUnits;
+  $('#ljSigmaField').hidden = realUnits;
 
   const densityPolymers = positiveInteger('densityPolymerCount');
   const densityX = positiveNumber('densityBoxX');
   const densityY = positiveNumber('densityBoxY');
   const densityZ = positiveNumber('densityBoxZ');
+  const ljSigmaNm = positiveNumber('ljSigmaNm');
   if (!densityPolymers || !densityX || !densityY || !densityZ) $('#densityResult').textContent = 'Enter a positive molecule count and X, Y, and Z lengths';
-  else if (realUnits) {
-    const molPerLiter = densityPolymers / (AVOGADRO * densityX * densityY * densityZ * 1e-27);
+  else if (!realUnits && !ljSigmaNm) $('#densityResult').textContent = 'Enter a positive physical σ in nm to calculate molar concentration';
+  else {
+    const volumeLiters = realUnits
+      ? densityX * densityY * densityZ * 1e-27
+      : densityX * densityY * densityZ * ljSigmaNm ** 3 * 1e-24;
+    const molPerLiter = densityPolymers / (AVOGADRO * volumeLiters);
     $('#densityResult').textContent = `${numberFormat.format(molPerLiter * 1e6)} µmol/L · ${numberFormat.format(molPerLiter * 1e3)} mmol/L`;
-  } else {
-    $('#densityResult').textContent = `${numberFormat.format(densityPolymers / (densityX * densityY * densityZ))} molecules/σ³`;
   }
 
-  const boxPolymers = positiveInteger('boxPolymerCount');
-  const targetDensity = positiveNumber('targetDensity');
-  const aspectX = positiveNumber('boxAspectX');
-  const aspectY = positiveNumber('boxAspectY');
-  const aspectZ = positiveNumber('boxAspectZ');
-  if (!boxPolymers || !targetDensity) $('#boxLengthResult').textContent = 'Enter a positive molecule count and target concentration';
-  else if (!aspectX || !aspectY || !aspectZ) $('#boxLengthResult').textContent = 'Enter positive X:Y:Z proportions';
-  else {
-    const volume = realUnits
-      ? boxPolymers / (AVOGADRO * targetDensity * ($('#targetDensityScale').value === 'mmol' ? 1e-3 : 1e-6) * 1e-27)
-      : boxPolymers / targetDensity;
-    const scale = Math.cbrt(volume / (aspectX * aspectY * aspectZ));
-    const unit = style.length;
-    $('#boxLengthResult').textContent = `X ${numberFormat.format(aspectX * scale)} × Y ${numberFormat.format(aspectY * scale)} × Z ${numberFormat.format(aspectZ * scale)} ${unit}`;
-  }
 }
 
-['densityPolymerCount', 'densityBoxX', 'densityBoxY', 'densityBoxZ', 'boxPolymerCount', 'targetDensity', 'boxAspectX', 'boxAspectY', 'boxAspectZ'].forEach(id => $(`#${id}`).addEventListener('input', updateCalculators));
+['densityPolymerCount', 'densityBoxX', 'densityBoxY', 'densityBoxZ', 'ljSigmaNm'].forEach(id => $(`#${id}`).addEventListener('input', updateCalculators));
 $('#calcUnits').addEventListener('change', updateCalculators);
-$('#targetDensityScale').addEventListener('change', updateCalculators);
 
 function syncPageFromHash() {
   const requestedPage = window.location.hash.slice(1);
